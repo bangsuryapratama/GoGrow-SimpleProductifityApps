@@ -1,0 +1,37 @@
+name: GoGrow
+description: "A premium Personal Growth & Productivity App."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  shared_preferences: ^2.3.2
+  http: ^1.2.0
+  flutter_local_notifications: ^17.2.4
+  timezone: ^0.9.4
+  cupertino_icons: ^1.0.8
+  url_launcher: ^6.3.1
+  intl: ^0.19.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+  flutter_launcher_icons: ^0.13.1
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/images/logo_apk.png"
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/images/
