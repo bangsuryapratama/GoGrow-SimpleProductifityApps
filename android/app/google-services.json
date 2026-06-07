@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "31111004747",
+    "project_id": "gogrow-52410",
+    "storage_bucket": "gogrow-52410.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:31111004747:android:05f9a5b258c2b01d9143ce",
+        "android_client_info": {
+          "package_name": "com.example.gogrow"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD3wy-rv_VqZHqc0M3mfv14iM3CQRHZhN8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

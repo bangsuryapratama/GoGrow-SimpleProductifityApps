@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
-import 'package:GoGrow/screens/dashboard_screen.dart';
-import 'package:GoGrow/screens/growmind_screen.dart';
-import 'package:GoGrow/screens/habit_screen.dart';
-import 'package:GoGrow/screens/profile_screen.dart';
-import 'package:GoGrow/widgets/app_nav_bar.dart';
-
+import '../widgets/app_nav_bar.dart';
+import '../widgets/app_theme.dart';
+import 'dashboard_screen.dart';
+import 'habit_screen.dart';
+import 'growmind_screen.dart';
+import 'profile_screen.dart';
 
 class MainLayout extends StatefulWidget {
   const MainLayout({super.key});
@@ -16,7 +16,7 @@ class MainLayout extends StatefulWidget {
 class _MainLayoutState extends State<MainLayout> {
   int _currentIndex = 0;
 
-  final List<Widget> _pages = const [
+  final List<Widget> _screens = const [
     DashboardScreen(),
     HabitScreen(),
     GrowMindScreen(),
@@ -26,18 +26,23 @@ class _MainLayoutState extends State<MainLayout> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF0A0A0A),
-      body: IndexedStack(
-        index: _currentIndex,
-        children: _pages,
+      backgroundColor: AppTheme.bg,
+      body: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 250),
+        switchInCurve: Curves.easeOut,
+        switchOutCurve: Curves.easeIn,
+        transitionBuilder: (child, animation) => FadeTransition(
+          opacity: animation,
+          child: child,
+        ),
+        child: KeyedSubtree(
+          key: ValueKey<int>(_currentIndex),
+          child: _screens[_currentIndex],
+        ),
       ),
       bottomNavigationBar: ProfessionalNavBar(
         currentIndex: _currentIndex,
-        onTap: (index) {
-          setState(() {
-            _currentIndex = index;
-          });
-        },
+        onTap: (i) => setState(() => _currentIndex = i),
       ),
     );
   }

@@ -1,371 +1,312 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:webview_flutter/webview_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../services/search_service.dart';
+import '../services/storage_service.dart';
 import '../widgets/app_theme.dart';
 import '../widgets/common_widgets.dart';
 
 class GrowMindScreen extends StatefulWidget {
   const GrowMindScreen({super.key});
-
   @override
   State<GrowMindScreen> createState() => _GrowMindScreenState();
 }
 
-class _GrowMindScreenState extends State<GrowMindScreen>
-    with SingleTickerProviderStateMixin {
+class _GrowMindScreenState extends State<GrowMindScreen> with TickerProviderStateMixin {
   late TabController _tabController;
   final TextEditingController _searchCtrl = TextEditingController();
-  final FocusNode _searchFocus = FocusNode();
 
+  // YouTube state
   List<VideoResult> _videos = [];
+  bool _ytLoading = false;
+  String _ytQuery = 'pengembangan diri motivasi';
+
+  // TikTok WebView
+  WebViewController? _tikTokController;
+  bool _tikTokLoaded = false;
+  String _tikTokTopic = 'pengembangandir';
+
+  // Article state
   List<ArticleResult> _articles = [];
+  bool _artLoading = false;
 
-  bool _loadingVideos = false;
-  bool _loadingArticles = false;
-  bool _hasSearched = false;
-  String _lastQuery = '';
+  // Category
+  String _activeCategory = 'Semua';
 
-  // Kurated topics untuk chips
-  static const List<String> _suggestedTopics = [
-    'Stoikisme', 'Atomic Habits', 'Deep Work', 'Mindset',
-    'Produktivitas', 'Meditasi', 'Growth Mindset', 'Keuangan',
+  static const List<Map<String, dynamic>> _categories = [
+    {'id': 'Semua', 'icon': Icons.apps_rounded, 'color': AppTheme.accent, 'tiktok': 'selfimprovement', 'yt': 'pengembangan diri motivasi'},
+    {'id': 'Produktivitas', 'icon': Icons.bolt_rounded, 'color': AppTheme.warning, 'tiktok': 'produktivitas', 'yt': 'produktivitas deep work'},
+    {'id': 'Mindfulness', 'icon': Icons.spa_rounded, 'color': AppTheme.cyan, 'tiktok': 'mindfulness', 'yt': 'meditasi mindfulness stoik'},
+    {'id': 'Belajar', 'icon': Icons.menu_book_rounded, 'color': AppTheme.blue, 'tiktok': 'belajar', 'yt': 'belajar efektif buku rekomendasi'},
+    {'id': 'Finansial', 'icon': Icons.trending_up_rounded, 'color': AppTheme.purple, 'tiktok': 'investasi', 'yt': 'investasi keuangan finansial'},
+    {'id': 'Kesehatan', 'icon': Icons.favorite_rounded, 'color': AppTheme.danger, 'tiktok': 'kesehatanmental', 'yt': 'kesehatan mental olahraga'},
   ];
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 2, vsync: this);
-    _tabController.addListener(_onTabChange);
-    // Load konten awal
-    _performSearch('pengembangan diri');
+    _tabController = TabController(length: 3, vsync: this);
+    _tabController.addListener(() {
+      if (!_tabController.indexIsChanging) setState(() {});
+      if (_tabController.index == 1 && !_tikTokLoaded) {
+        _initTikTok();
+      }
+    });
+    _loadYouTube(_ytQuery);
+    _loadArticles('pengembangan diri');
   }
 
   @override
   void dispose() {
-    _tabController.removeListener(_onTabChange);
     _tabController.dispose();
     _searchCtrl.dispose();
-    _searchFocus.dispose();
     super.dispose();
   }
 
-  void _onTabChange() {
-    if (!_tabController.indexIsChanging && _lastQuery.isNotEmpty) {
-      // Tidak perlu re-search, data sudah di-load
+  void _initTikTok() {
+    final url = 'https://www.tiktok.com/search?q=%23$_tikTokTopic';
+    final ctrl = WebViewController()
+      ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..setBackgroundColor(const Color(0xFF080B10))
+      ..setNavigationDelegate(NavigationDelegate(
+        onPageFinished: (_) {
+          if (mounted) setState(() => _tikTokLoaded = true);
+          // Inject dark background CSS
+          _tikTokController?.runJavaScript(
+            "document.body.style.backgroundColor='#080B10';"
+          );
+        },
+      ))
+      ..loadRequest(Uri.parse(url));
+    setState(() {
+      _tikTokController = ctrl;
+    });
+  }
+
+  Future<void> _loadYouTube(String query) async {
+    setState(() => _ytLoading = true);
+    try {
+      final cat = _activeCategory == 'Semua' ? null : _activeCategory;
+      final results = await SearchService.searchYouTube(query, category: cat);
+      if (mounted) setState(() { _videos = results; _ytLoading = false; });
+    } catch (_) {
+      if (mounted) setState(() => _ytLoading = false);
     }
   }
 
-  Future<void> _performSearch(String query) async {
-    final q = query.trim();
-    if (q.isEmpty) return;
+  Future<void> _loadArticles(String query) async {
+    setState(() => _artLoading = true);
+    try {
+      final results = await SearchService.searchArticles(query);
+      if (mounted) setState(() { _articles = results; _artLoading = false; });
+    } catch (_) {
+      if (mounted) setState(() => _artLoading = false);
+    }
+  }
 
-    _lastQuery = q;
-    _searchCtrl.text = q;
-    _searchFocus.unfocus();
+  void _onCategoryTap(Map<String, dynamic> cat) {
+    setState(() => _activeCategory = cat['id'] as String);
+    HapticFeedback.selectionClick();
+    final ytQ = cat['yt'] as String;
+    final tikTokTag = cat['tiktok'] as String;
+    _ytQuery = ytQ;
+    _tikTokTopic = tikTokTag;
+    _loadYouTube(ytQ);
+    _loadArticles(ytQ);
 
-    setState(() {
-      _loadingVideos = true;
-      _loadingArticles = true;
-      _hasSearched = true;
-    });
+    if (_tabController.index == 1) {
+      _tikTokController?.loadRequest(
+        Uri.parse('https://www.tiktok.com/search?q=%23$tikTokTag')
+      );
+    }
+  }
 
-    // Paralel request
-    final videosFuture = SearchService.searchYouTube(q);
-    final articlesFuture = SearchService.searchArticles(q);
-
-    final videos = await videosFuture;
-    if (mounted) setState(() { _videos = videos; _loadingVideos = false; });
-
-    final articles = await articlesFuture;
-    if (mounted) setState(() { _articles = articles; _loadingArticles = false; });
+  void _onSearch(String q) {
+    if (q.trim().isEmpty) return;
+    _ytQuery = q;
+    _loadYouTube(q);
+    _loadArticles(q);
+    if (_tabController.index == 1 && _tikTokController != null) {
+      _tikTokController!.loadRequest(
+        Uri.parse('https://www.tiktok.com/search?q=${Uri.encodeComponent(q)}')
+      );
+    }
   }
 
   Future<void> _openUrl(String url) async {
-    if (url.isEmpty) return;
-    try {
-      final uri = Uri.parse(url);
-      if (await canLaunchUrl(uri)) {
-        await launchUrl(uri, mode: LaunchMode.externalApplication);
-      } else {
-        _showUrlError();
-      }
-    } catch (_) {
-      _showUrlError();
+    final uri = Uri.parse(url);
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
     }
   }
 
-  void _showUrlError() {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Tidak dapat membuka link. Cek koneksi internet Anda.'),
-        backgroundColor: AppTheme.danger,
-      ),
-    );
+  void _toggleBookmark(String type, String title, String url, String thumb, String source) {
+    final bookmarks = StorageService.getBookmarks();
+    final isBookmarked = StorageService.isBookmarked(url);
+    if (isBookmarked) {
+      StorageService.removeBookmark(url);
+    } else {
+      StorageService.addBookmark({'type': type, 'title': title, 'url': url, 'thumbnail': thumb, 'source': source});
+    }
+    HapticFeedback.selectionClick();
+    setState(() {});
   }
 
-  void _showVideoDetail(VideoResult video) {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: AppTheme.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(AppTheme.radiusXL)),
-      ),
-      builder: (ctx) => Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Center(
-              child: Container(
-                width: 40, height: 4,
-                decoration: BoxDecoration(
-                  color: AppTheme.borderMedium,
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-            ),
-            const SizedBox(height: 20),
-            // Thumbnail
-            Stack(
-              alignment: Alignment.center,
-              children: [
-                NetImage(
-                  video.thumbnail,
-                  height: 180,
-                  width: double.infinity,
-                  borderRadius: BorderRadius.circular(AppTheme.radiusL),
-                ),
-                GestureDetector(
-                  onTap: () {
-                    Navigator.pop(ctx);
-                    _openUrl(video.url);
-                  },
-                  child: Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: const BoxDecoration(
-                      color: Color(0xCC000000),
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(Icons.play_arrow_rounded, color: AppTheme.accent, size: 36),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            Text(video.title, style: AppTheme.headingMedium),
-            const SizedBox(height: 6),
-            Text(video.channelName, style: const TextStyle(color: AppTheme.accent, fontSize: 13, fontWeight: FontWeight.w600)),
-            if (video.description.isNotEmpty) ...[
-              const SizedBox(height: 10),
-              Text(
-                video.description,
-                style: AppTheme.bodyMedium,
-                maxLines: 4,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ],
-            const SizedBox(height: 20),
-            PrimaryButton(
-              label: 'Tonton di YouTube',
-              icon: Icons.play_circle_outline,
-              onTap: () {
-                Navigator.pop(ctx);
-                _openUrl(video.url);
-              },
-            ),
-            const SizedBox(height: 8),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _showArticleDetail(ArticleResult article) {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: AppTheme.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(AppTheme.radiusXL)),
-      ),
-      builder: (ctx) => DraggableScrollableSheet(
-        initialChildSize: 0.75,
-        maxChildSize: 0.92,
-        minChildSize: 0.4,
-        expand: false,
-        builder: (ctx, scroll) => SingleChildScrollView(
-          controller: scroll,
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Center(
-                child: Container(
-                  width: 40, height: 4,
-                  decoration: BoxDecoration(
-                    color: AppTheme.borderMedium,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 20),
-              if (article.imageUrl.isNotEmpty) ...[
-                NetImage(
-                  article.imageUrl,
-                  height: 160,
-                  width: double.infinity,
-                  borderRadius: BorderRadius.circular(AppTheme.radiusL),
-                ),
-                const SizedBox(height: 16),
-              ],
-              AccentChip(label: article.source),
-              const SizedBox(height: 10),
-              Text(article.title, style: AppTheme.headingMedium),
-              const SizedBox(height: 14),
-              Text(article.description, style: AppTheme.bodyMedium),
-              const SizedBox(height: 24),
-              PrimaryButton(
-                label: 'Baca Selengkapnya',
-                icon: Icons.open_in_new,
-                onTap: () {
-                  Navigator.pop(ctx);
-                  _openUrl(article.url);
-                },
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  // ─── Build ─────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppTheme.bg,
       body: SafeArea(
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Header
-            const Padding(
-              padding: EdgeInsets.fromLTRB(AppTheme.pagePadding, 20, AppTheme.pagePadding, 12),
+            // ── Header ──────────────────────────────────────────────────────
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('GrowMind', style: AppTheme.headingLarge),
-                  SizedBox(height: 4),
-                  Text('Edukasi pengembangan diri dari YouTube & internet.', style: AppTheme.bodyMedium),
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          gradient: AppTheme.purpleGradient,
+                          borderRadius: BorderRadius.circular(AppTheme.radiusM),
+                          boxShadow: AppTheme.glowShadow(AppTheme.purple, blur: 16),
+                        ),
+                        child: const Icon(Icons.psychology_rounded, color: Colors.white, size: 22),
+                      ),
+                      const SizedBox(width: 12),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('GrowMind', style: AppTheme.headingMedium),
+                          Text('Konten pengembangan dirimu', style: AppTheme.bodySmall),
+                        ],
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Search
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _searchCtrl,
+                          style: const TextStyle(color: AppTheme.textPrimary, fontSize: 14),
+                          onSubmitted: _onSearch,
+                          decoration: InputDecoration(
+                            hintText: 'Cari topik, channel, buku...',
+                            prefixIcon: const Icon(Icons.search_rounded, color: AppTheme.textMuted, size: 18),
+                            suffixIcon: _searchCtrl.text.isNotEmpty
+                                ? GestureDetector(
+                                    onTap: () { _searchCtrl.clear(); setState(() {}); },
+                                    child: const Icon(Icons.close_rounded, size: 16, color: AppTheme.textMuted),
+                                  )
+                                : null,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      GestureDetector(
+                        onTap: () => _onSearch(_searchCtrl.text),
+                        child: Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            gradient: AppTheme.purpleGradient,
+                            borderRadius: BorderRadius.circular(AppTheme.radiusM),
+                            boxShadow: AppTheme.glowShadow(AppTheme.purple, blur: 10),
+                          ),
+                          child: const Icon(Icons.search_rounded, color: Colors.white, size: 20),
+                        ),
+                      ),
+                    ],
+                  ),
                 ],
               ),
             ),
 
-            // Search Bar
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: AppTheme.pagePadding),
-              child: TextField(
-                controller: _searchCtrl,
-                focusNode: _searchFocus,
-                style: const TextStyle(color: Colors.white, fontSize: 14),
-                textInputAction: TextInputAction.search,
-                onSubmitted: _performSearch,
-                decoration: InputDecoration(
-                  hintText: 'Cari topik (stoik, habit, produktif)...',
-                  prefixIcon: const Icon(Icons.search, color: AppTheme.textMuted, size: 20),
-                  suffixIcon: (_loadingVideos || _loadingArticles)
-                      ? const Padding(
-                          padding: EdgeInsets.all(12),
-                          child: SizedBox(
-                            width: 18, height: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.accent),
-                          ),
-                        )
-                      : IconButton(
-                          icon: const Icon(Icons.send_rounded, color: AppTheme.accent, size: 18),
-                          onPressed: () => _performSearch(_searchCtrl.text),
-                        ),
-                ),
-              ),
-            ),
-
-            // Topic Chips
-            const SizedBox(height: 12),
+            // ── Category Chips ──────────────────────────────────────────────
             SizedBox(
-              height: 36,
-              child: ListView.separated(
-                padding: const EdgeInsets.symmetric(horizontal: AppTheme.pagePadding),
+              height: 52,
+              child: ListView.builder(
                 scrollDirection: Axis.horizontal,
-                itemCount: _suggestedTopics.length,
-                separatorBuilder: (_, __) => const SizedBox(width: 8),
-                itemBuilder: (_, i) => GestureDetector(
-                  onTap: () => _performSearch(_suggestedTopics[i]),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-                    decoration: BoxDecoration(
-                      color: _lastQuery.toLowerCase() == _suggestedTopics[i].toLowerCase()
-                          ? AppTheme.accentDim
-                          : AppTheme.surface,
-                      borderRadius: BorderRadius.circular(AppTheme.radiusM),
-                      border: Border.all(
-                        color: _lastQuery.toLowerCase() == _suggestedTopics[i].toLowerCase()
-                            ? AppTheme.accent
-                            : AppTheme.borderSubtle,
+                padding: const EdgeInsets.fromLTRB(20, 10, 20, 0),
+                itemCount: _categories.length,
+                itemBuilder: (_, i) {
+                  final cat = _categories[i];
+                  final isSel = _activeCategory == cat['id'];
+                  final color = cat['color'] as Color;
+                  return GestureDetector(
+                    onTap: () => _onCategoryTap(cat),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 200),
+                      margin: const EdgeInsets.only(right: 8),
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: isSel ? color.withValues(alpha: 0.15) : AppTheme.surface,
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: isSel ? color : AppTheme.borderSubtle, width: isSel ? 1.5 : 1),
+                        boxShadow: isSel ? AppTheme.glowShadow(color, blur: 8) : null,
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(cat['icon'] as IconData, size: 13, color: isSel ? color : AppTheme.textMuted),
+                          const SizedBox(width: 5),
+                          Text(cat['id'] as String,
+                            style: TextStyle(
+                              color: isSel ? color : AppTheme.textSecondary,
+                              fontSize: 12,
+                              fontWeight: isSel ? FontWeight.bold : FontWeight.normal,
+                            )),
+                        ],
                       ),
                     ),
-                    child: Text(
-                      _suggestedTopics[i],
-                      style: TextStyle(
-                        color: _lastQuery.toLowerCase() == _suggestedTopics[i].toLowerCase()
-                            ? AppTheme.accent
-                            : AppTheme.textSecondary,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                ),
+                  );
+                },
               ),
             ),
-            const SizedBox(height: 16),
 
-            // Tab Bar
+            // ── Tab Bar ──────────────────────────────────────────────────────
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: AppTheme.pagePadding),
+              padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
               child: Container(
-                height: 48,
                 decoration: BoxDecoration(
                   color: AppTheme.surface,
                   borderRadius: BorderRadius.circular(AppTheme.radiusM),
                 ),
                 child: TabBar(
                   controller: _tabController,
-                  indicatorColor: Colors.transparent,
                   dividerColor: Colors.transparent,
-                  labelColor: Colors.black,
-                  unselectedLabelColor: AppTheme.textSecondary,
-                  indicatorSize: TabBarIndicatorSize.tab,
                   indicator: BoxDecoration(
-                    color: AppTheme.accent,
-                    borderRadius: BorderRadius.circular(AppTheme.radiusS),
+                    gradient: AppTheme.purpleGradient,
+                    borderRadius: BorderRadius.circular(AppTheme.radiusM),
                   ),
+                  labelColor: Colors.white,
+                  unselectedLabelColor: AppTheme.textMuted,
+                  labelStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                  unselectedLabelStyle: const TextStyle(fontSize: 12),
                   tabs: const [
-                    Tab(child: Text('Video', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13))),
-                    Tab(child: Text('Artikel & Buku', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13))),
+                    Tab(icon: Icon(Icons.play_circle_outline_rounded, size: 16), text: 'YouTube'),
+                    Tab(icon: Icon(Icons.music_note_rounded, size: 16), text: 'TikTok'),
+                    Tab(icon: Icon(Icons.article_outlined, size: 16), text: 'Artikel'),
                   ],
                 ),
               ),
             ),
-            const SizedBox(height: 16),
 
-            // Tab Content
+            const SizedBox(height: 8),
+
+            // ── Content ──────────────────────────────────────────────────────
             Expanded(
               child: TabBarView(
                 controller: _tabController,
                 children: [
-                  _buildVideoTab(),
+                  _buildYouTubeTab(),
+                  _buildTikTokTab(),
                   _buildArticleTab(),
                 ],
               ),
@@ -376,161 +317,309 @@ class _GrowMindScreenState extends State<GrowMindScreen>
     );
   }
 
-  // ─── Video Tab ──────────────────────────────────────────────────────────────
-  Widget _buildVideoTab() {
-    if (_loadingVideos) return const LoadingState();
-    if (_videos.isEmpty) return const EmptyState(
-      icon: Icons.videocam_off_outlined,
-      message: 'Tidak ada video ditemukan.',
-      subtitle: 'Coba kata kunci lain di atas.',
-    );
-
+  // ── YouTube Tab ────────────────────────────────────────────────────────────
+  Widget _buildYouTubeTab() {
+    if (_ytLoading) return _buildShimmerList();
+    if (_videos.isEmpty) {
+      return EmptyState(
+        icon: Icons.video_library_outlined,
+        message: 'Tidak ada video ditemukan',
+        subtitle: 'Coba kata kunci lain',
+      );
+    }
     return ListView.builder(
-      padding: const EdgeInsets.symmetric(horizontal: AppTheme.pagePadding),
+      padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
       itemCount: _videos.length,
-      itemBuilder: (_, i) => _VideoCard(video: _videos[i], onTap: () => _showVideoDetail(_videos[i])),
+      itemBuilder: (_, i) => _buildVideoCard(_videos[i], i),
     );
   }
 
-  // ─── Article Tab ────────────────────────────────────────────────────────────
-  Widget _buildArticleTab() {
-    if (_loadingArticles) return const LoadingState();
-    if (_articles.isEmpty) return const EmptyState(
-      icon: Icons.article_outlined,
-      message: 'Tidak ada artikel ditemukan.',
-      subtitle: 'Coba kata kunci lain di atas.',
-    );
-
-    return ListView.builder(
-      padding: const EdgeInsets.symmetric(horizontal: AppTheme.pagePadding),
-      itemCount: _articles.length,
-      itemBuilder: (_, i) => _ArticleCard(article: _articles[i], onTap: () => _showArticleDetail(_articles[i])),
-    );
-  }
-}
-
-// ─── Video Card Widget ──────────────────────────────────────────────────────────
-class _VideoCard extends StatelessWidget {
-  final VideoResult video;
-  final VoidCallback onTap;
-  const _VideoCard({required this.video, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) => GestureDetector(
-    onTap: onTap,
-    child: Container(
-      margin: const EdgeInsets.only(bottom: AppTheme.itemSpacing),
-      decoration: BoxDecoration(
-        color: AppTheme.surface,
-        borderRadius: BorderRadius.circular(AppTheme.radiusL),
-        border: Border.all(color: AppTheme.borderSubtle),
-      ),
-      child: Row(
-        children: [
-          // Thumbnail
-          Stack(
-            alignment: Alignment.center,
+  Widget _buildVideoCard(VideoResult v, int index) {
+    final isBookmarked = StorageService.isBookmarked(v.url);
+    return TweenAnimationBuilder<double>(
+      key: Key('v_$index'),
+      tween: Tween(begin: 0.0, end: 1.0),
+      duration: Duration(milliseconds: 200 + index * 40),
+      curve: Curves.easeOut,
+      builder: (_, val, child) => Opacity(opacity: val, child: Transform.translate(offset: Offset(0, 12 * (1 - val)), child: child)),
+      child: GestureDetector(
+        onTap: () => _openUrl(v.url),
+        child: Container(
+          margin: const EdgeInsets.only(bottom: 10),
+          decoration: BoxDecoration(
+            color: AppTheme.surface,
+            borderRadius: BorderRadius.circular(AppTheme.radiusL),
+            border: Border.all(color: AppTheme.borderSubtle),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              NetImage(
-                video.thumbnail,
-                width: 100,
-                height: 76,
-                borderRadius: const BorderRadius.horizontal(left: Radius.circular(AppTheme.radiusL)),
+              // Thumbnail
+              ClipRRect(
+                borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(AppTheme.radiusL),
+                  bottomLeft: Radius.circular(AppTheme.radiusL),
+                ),
+                child: Stack(
+                  children: [
+                    NetImage(v.thumbnail, width: 116, height: 80, fit: BoxFit.cover),
+                    // Duration
+                    if (v.duration.isNotEmpty)
+                      Positioned(bottom: 4, right: 4,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                          decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.85), borderRadius: BorderRadius.circular(4)),
+                          child: Text(v.duration, style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+                        ),
+                      ),
+                    // Play overlay
+                    Positioned.fill(child: Center(
+                      child: Container(
+                        padding: const EdgeInsets.all(5),
+                        decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.5), shape: BoxShape.circle),
+                        child: const Icon(Icons.play_arrow_rounded, color: Colors.white, size: 16),
+                      ),
+                    )),
+                  ],
+                ),
               ),
-              Container(
-                padding: const EdgeInsets.all(6),
-                decoration: const BoxDecoration(color: Color(0xAA000000), shape: BoxShape.circle),
-                child: const Icon(Icons.play_arrow_rounded, color: AppTheme.accent, size: 18),
+              // Info
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(10, 10, 8, 10),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(v.title, maxLines: 2, overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: AppTheme.textPrimary, fontSize: 12, fontWeight: FontWeight.w600, height: 1.3)),
+                      const SizedBox(height: 5),
+                      Row(
+                        children: [
+                          const Icon(Icons.play_circle_filled_rounded, color: AppTheme.danger, size: 11),
+                          const SizedBox(width: 3),
+                          Expanded(child: Text(v.channelName, maxLines: 1, overflow: TextOverflow.ellipsis,
+                            style: AppTheme.captionStyle)),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              // Bookmark
+              GestureDetector(
+                onTap: () => _toggleBookmark('video', v.title, v.url, v.thumbnail, v.channelName),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(0, 8, 8, 0),
+                  child: Icon(
+                    isBookmarked ? Icons.bookmark_rounded : Icons.bookmark_outline_rounded,
+                    color: isBookmarked ? AppTheme.accent : AppTheme.textMuted,
+                    size: 18,
+                  ),
+                ),
               ),
             ],
           ),
-          // Info
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+        ),
+      ),
+    );
+  }
+
+  // ── TikTok Tab ─────────────────────────────────────────────────────────────
+  Widget _buildTikTokTab() {
+    if (_tikTokController == null) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                gradient: AppTheme.purpleGradient,
+                shape: BoxShape.circle,
+                boxShadow: AppTheme.glowShadow(AppTheme.purple, blur: 24),
+              ),
+              child: const Icon(Icons.music_note_rounded, color: Colors.white, size: 40),
+            ),
+            const SizedBox(height: 20),
+            Text('Buka TikTok Self-Development', style: AppTheme.headingSmall),
+            const SizedBox(height: 8),
+            Text('Konten #pengembangandir langsung\ndi dalam app', style: AppTheme.bodyMedium, textAlign: TextAlign.center),
+            const SizedBox(height: 24),
+            GestureDetector(
+              onTap: () { _tabController.animateTo(1); _initTikTok(); },
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 14),
+                decoration: BoxDecoration(
+                  gradient: AppTheme.purpleGradient,
+                  borderRadius: BorderRadius.circular(AppTheme.radiusM),
+                  boxShadow: AppTheme.glowShadow(AppTheme.purple, blur: 16),
+                ),
+                child: const Text('Buka TikTok', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Stack(
+      children: [
+        WebViewWidget(controller: _tikTokController!),
+        // Topic quick-switch bar
+        Positioned(
+          top: 0, left: 0, right: 0,
+          child: Container(
+            color: AppTheme.bg.withValues(alpha: 0.9),
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: Row(
                 children: [
-                  Text(
-                    video.title,
-                    style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  const SizedBox(height: 5),
-                  Text(
-                    video.channelName,
-                    style: const TextStyle(color: AppTheme.accent, fontSize: 11, fontWeight: FontWeight.w600),
-                  ),
+                  _tikTokChip('pengembangan diri', 'selfimprovement'),
+                  _tikTokChip('motivasi', 'motivasi'),
+                  _tikTokChip('produktivitas', 'produktivitas'),
+                  _tikTokChip('mindfulness', 'mindfulness'),
+                  _tikTokChip('investasi', 'investasi'),
+                  _tikTokChip('belajar', 'belajar'),
                 ],
               ),
             ),
           ),
-          const Padding(
-            padding: EdgeInsets.only(right: 12),
-            child: Icon(Icons.chevron_right, color: AppTheme.textMuted, size: 18),
+        ),
+        if (!_tikTokLoaded)
+          Container(
+            color: AppTheme.bg,
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SizedBox(width: 36, height: 36,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.purple)),
+                  const SizedBox(height: 16),
+                  Text('Memuat TikTok...', style: AppTheme.bodyMedium),
+                ],
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _tikTokChip(String label, String tag) {
+    return GestureDetector(
+      onTap: () {
+        _tikTokController?.loadRequest(Uri.parse('https://www.tiktok.com/search?q=%23$tag'));
+        setState(() { _tikTokLoaded = false; _tikTokTopic = tag; });
+        HapticFeedback.selectionClick();
+      },
+      child: Container(
+        margin: const EdgeInsets.only(right: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+        decoration: BoxDecoration(
+          color: _tikTokTopic == tag ? AppTheme.purpleDim : AppTheme.surfaceAlt,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: _tikTokTopic == tag ? AppTheme.purple : AppTheme.borderSubtle),
+        ),
+        child: Text('#$label', style: TextStyle(
+          color: _tikTokTopic == tag ? AppTheme.purple : AppTheme.textSecondary,
+          fontSize: 11, fontWeight: FontWeight.w600,
+        )),
+      ),
+    );
+  }
+
+  // ── Article Tab ────────────────────────────────────────────────────────────
+  Widget _buildArticleTab() {
+    if (_artLoading) return _buildShimmerList();
+    if (_articles.isEmpty) {
+      return EmptyState(icon: Icons.article_outlined, message: 'Tidak ada artikel', subtitle: 'Coba kata kunci lain');
+    }
+
+    // Add bookmarks section at top
+    final bookmarks = StorageService.getBookmarks();
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
+      children: [
+        if (bookmarks.isNotEmpty) ...[
+          Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: Text('TERSIMPAN', style: AppTheme.labelSmall),
+          ),
+          ...bookmarks.take(3).map((b) => _buildArticleCard(
+            ArticleResult(title: b['title'] ?? '', description: '', url: b['url'] ?? '', source: b['source'] ?? '', imageUrl: ''),
+            -1, isBookmarked: true,
+          )),
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 10),
+            child: Text('ARTIKEL & BUKU', style: AppTheme.labelSmall),
           ),
         ],
-      ),
-    ),
-  );
-}
+        ..._articles.asMap().entries.map((e) => _buildArticleCard(e.value, e.key)),
+      ],
+    );
+  }
 
-// ─── Article Card Widget ────────────────────────────────────────────────────────
-class _ArticleCard extends StatelessWidget {
-  final ArticleResult article;
-  final VoidCallback onTap;
-  const _ArticleCard({required this.article, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) => GestureDetector(
-    onTap: onTap,
-    child: Container(
-      margin: const EdgeInsets.only(bottom: AppTheme.itemSpacing),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: AppTheme.surface,
-        borderRadius: BorderRadius.circular(AppTheme.radiusL),
-        border: Border.all(color: AppTheme.borderSubtle),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (article.imageUrl.isNotEmpty) ...[
-            NetImage(
-              article.imageUrl,
-              width: 58,
-              height: 58,
-              borderRadius: BorderRadius.circular(AppTheme.radiusS),
-            ),
-            const SizedBox(width: 12),
-          ],
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+  Widget _buildArticleCard(ArticleResult a, int index, {bool isBookmarked = false}) {
+    if (a.title.isEmpty) return const SizedBox.shrink();
+    final bookmarked = isBookmarked || StorageService.isBookmarked(a.url);
+    return GestureDetector(
+      onTap: () => _openUrl(a.url),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 10),
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: AppTheme.surface,
+          borderRadius: BorderRadius.circular(AppTheme.radiusL),
+          border: Border.all(color: AppTheme.borderSubtle),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
               children: [
-                AccentChip(label: article.source),
-                const SizedBox(height: 6),
-                Text(
-                  article.title,
-                  style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
+                Container(
+                  padding: const EdgeInsets.all(5),
+                  decoration: BoxDecoration(color: AppTheme.purpleDim, borderRadius: BorderRadius.circular(6)),
+                  child: const Icon(Icons.article_rounded, color: AppTheme.purple, size: 12),
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  article.description,
-                  style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12, height: 1.4),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
+                const SizedBox(width: 6),
+                Expanded(child: Text(a.source, style: AppTheme.captionStyle.copyWith(color: AppTheme.purple))),
+                GestureDetector(
+                  onTap: () => _toggleBookmark('article', a.title, a.url, '', a.source),
+                  child: Icon(bookmarked ? Icons.bookmark_rounded : Icons.bookmark_outline_rounded,
+                    color: bookmarked ? AppTheme.accent : AppTheme.textMuted, size: 16),
                 ),
               ],
             ),
-          ),
-          const SizedBox(width: 8),
-          const Icon(Icons.open_in_new, color: AppTheme.textMuted, size: 16),
+            const SizedBox(height: 8),
+            Text(a.title, style: const TextStyle(color: AppTheme.textPrimary, fontSize: 13, fontWeight: FontWeight.w700)),
+            if (a.description.isNotEmpty) ...[
+              const SizedBox(height: 5),
+              Text(a.description, maxLines: 2, overflow: TextOverflow.ellipsis,
+                style: AppTheme.bodySmall.copyWith(height: 1.5)),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildShimmerList() => ListView(
+    padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
+    children: List.generate(5, (i) => Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Row(
+        children: [
+          ShimmerLoading(width: 116, height: 80, radius: AppTheme.radiusL),
+          const SizedBox(width: 10),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            ShimmerLoading(width: double.infinity, height: 14),
+            const SizedBox(height: 6),
+            ShimmerLoading(width: 140, height: 12),
+          ])),
         ],
       ),
-    ),
+    )),
   );
 }

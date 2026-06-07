@@ -2,59 +2,88 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 /// SearchService — Pencarian konten edukasi untuk GrowMind.
-/// Menggunakan YouTube Data API v3 untuk video dan DuckDuckGo Instant Answer
-/// sebagai fallback gratis tanpa API key untuk artikel/buku.
+/// Menggunakan Invidious API (YouTube proxy gratis, tanpa API key)
+/// dan DuckDuckGo Instant Answer untuk artikel.
 class SearchService {
-  // ── YOUTUBE ──────────────────────────────────────────────────────────────────
-  // Ganti dengan API key YouTube Data v3 Anda dari Google Cloud Console.
-  // Cara mendapatkan: https://console.developers.google.com/
-  static const String _ytApiKey = 'YOUR_YOUTUBE_API_KEY_HERE';
-  static const String _ytBaseUrl = 'https://www.googleapis.com/youtube/v3';
+  // ── INVIDIOUS INSTANCES (fallback chain jika satu down) ─────────────────────
+  static const List<String> _invidiousInstances = [
+    'https://invidious.privacyredirect.com',
+    'https://inv.nadeko.net',
+    'https://yt.artemislena.eu',
+  ];
 
-  /// Mencari video YouTube berdasarkan query. Menambahkan kata kunci
-  /// pengembangan diri agar hasil lebih relevan.
-  static Future<List<VideoResult>> searchYouTube(String query) async {
+  // Simple in-memory cache
+  static final Map<String, List<VideoResult>> _videoCache = {};
+  static final Map<String, List<ArticleResult>> _articleCache = {};
+
+  // ── YOUTUBE VIA INVIDIOUS ────────────────────────────────────────────────────
+  static Future<List<VideoResult>> searchYouTube(String query, {String? category}) async {
     if (query.trim().isEmpty) return [];
 
-    final enrichedQuery = '$query pengembangan diri motivasi';
-    final uri = Uri.parse(
-      '$_ytBaseUrl/search?part=snippet&q=${Uri.encodeComponent(enrichedQuery)}'
-      '&type=video&maxResults=10&relevanceLanguage=id'
-      '&key=$_ytApiKey',
-    );
+    final cacheKey = '${query}_${category ?? ""}';
+    if (_videoCache.containsKey(cacheKey)) return _videoCache[cacheKey]!;
 
-    try {
-      final response = await http.get(uri).timeout(const Duration(seconds: 10));
-      if (response.statusCode != 200) return _fallbackVideos(query);
+    final enrichedQuery = category != null
+        ? '$query $category pengembangan diri'
+        : '$query pengembangan diri self improvement';
 
-      final data = jsonDecode(response.body);
-      final items = data['items'] as List? ?? [];
-
-      return items.map((item) {
-        final snippet = item['snippet'];
-        final videoId = item['id']['videoId'];
-        return VideoResult(
-          videoId: videoId,
-          title: snippet['title'] ?? '',
-          channelName: snippet['channelTitle'] ?? '',
-          thumbnail: snippet['thumbnails']['medium']['url'] ?? '',
-          description: snippet['description'] ?? '',
-          url: 'https://www.youtube.com/watch?v=$videoId',
-          publishedAt: snippet['publishedAt'] ?? '',
+    for (final instance in _invidiousInstances) {
+      try {
+        final uri = Uri.parse(
+          '$instance/api/v1/search?q=${Uri.encodeComponent(enrichedQuery)}'
+          '&type=video&sort_by=relevance&page=1',
         );
-      }).toList();
-    } catch (_) {
-      return _fallbackVideos(query);
+        final response = await http.get(uri, headers: {'Accept': 'application/json'})
+            .timeout(const Duration(seconds: 8));
+
+        if (response.statusCode != 200) continue;
+
+        final List<dynamic> items = jsonDecode(response.body);
+        if (items.isEmpty) continue;
+
+        final results = items.take(12).map((item) {
+          final videoId = item['videoId'] as String? ?? '';
+          final thumbnails = item['videoThumbnails'] as List? ?? [];
+          final thumb = thumbnails.isNotEmpty
+              ? (thumbnails.firstWhere((t) => t['quality'] == 'medium',
+                      orElse: () => thumbnails.first)['url'] as String? ?? '')
+              : '';
+          final duration = item['lengthSeconds'] as int? ?? 0;
+          final durationStr = duration > 0
+              ? '${duration ~/ 60}:${(duration % 60).toString().padLeft(2, '0')}'
+              : '';
+          return VideoResult(
+            videoId: videoId,
+            title: item['title'] as String? ?? '',
+            channelName: item['author'] as String? ?? '',
+            thumbnail: thumb.startsWith('//') ? 'https:$thumb' : thumb,
+            description: item['description'] as String? ?? '',
+            url: 'https://www.youtube.com/watch?v=$videoId',
+            publishedAt: '',
+            duration: durationStr,
+            viewCount: item['viewCount'] as int? ?? 0,
+          );
+        }).toList();
+
+        _videoCache[cacheKey] = results;
+        return results;
+      } catch (_) {
+        continue; // try next instance
+      }
     }
+
+    // All instances failed → gunakan curated fallback
+    return _fallbackVideos(query);
   }
 
-  // ── ARTIKEL & BUKU ─────────────────────────────────────────────────────────────
-  /// Mencari artikel menggunakan DuckDuckGo Instant Answer API (gratis, tanpa key).
+  // ── ARTIKEL VIA DUCKDUCKGO ──────────────────────────────────────────────────
   static Future<List<ArticleResult>> searchArticles(String query) async {
     if (query.trim().isEmpty) return [];
 
+    if (_articleCache.containsKey(query)) return _articleCache[query]!;
+
     final uri = Uri.parse(
-      'https://api.duckduckgo.com/?q=${Uri.encodeComponent(query + " buku pengembangan diri")}'
+      'https://api.duckduckgo.com/?q=${Uri.encodeComponent("$query pengembangan diri")}'
       '&format=json&no_html=1&skip_disambig=1',
     );
 
@@ -65,7 +94,16 @@ class SearchService {
       final data = jsonDecode(response.body);
       final List<ArticleResult> results = [];
 
-      // Related Topics
+      if (data['Abstract'] != null && (data['Abstract'] as String).isNotEmpty) {
+        results.insert(0, ArticleResult(
+          title: data['Heading'] ?? query,
+          description: data['Abstract'] ?? '',
+          url: data['AbstractURL'] ?? '',
+          source: data['AbstractSource'] ?? 'Wikipedia',
+          imageUrl: data['Image'] ?? '',
+        ));
+      }
+
       final relatedTopics = data['RelatedTopics'] as List? ?? [];
       for (final topic in relatedTopics.take(6)) {
         if (topic is Map && topic['Text'] != null) {
@@ -79,25 +117,27 @@ class SearchService {
         }
       }
 
-      // Abstract
-      if (data['Abstract'] != null && (data['Abstract'] as String).isNotEmpty) {
-        results.insert(0, ArticleResult(
-          title: data['Heading'] ?? query,
-          description: data['Abstract'] ?? '',
-          url: data['AbstractURL'] ?? '',
-          source: data['AbstractSource'] ?? 'Wikipedia',
-          imageUrl: data['Image'] ?? '',
-        ));
-      }
-
       if (results.isEmpty) return _fallbackArticles(query);
+      _articleCache[query] = results;
       return results;
     } catch (_) {
       return _fallbackArticles(query);
     }
   }
 
-  // ── Helpers ───────────────────────────────────────────────────────────────────
+  // ── Trending / Featured ─────────────────────────────────────────────────────
+  /// Konten unggulan berdasarkan kategori fokus user
+  static List<VideoResult> getFeaturedByGoal(String goal) {
+    final goalMap = {
+      'productivity': _fallbackVideos('deep work produktivitas'),
+      'health': _fallbackVideos('olahraga kesehatan mental'),
+      'learning': _fallbackVideos('belajar buku self improvement'),
+      'mindfulness': _fallbackVideos('meditasi stoik mindfulness'),
+      'finance': _fallbackVideos('investasi finansial kebebasan'),
+    };
+    return goalMap[goal] ?? _fallbackVideos('pengembangan diri');
+  }
+
   static String _extractTitle(String text) {
     if (text.length <= 60) return text;
     final parts = text.split(' - ');
@@ -105,65 +145,69 @@ class SearchService {
     return '${text.substring(0, 57)}...';
   }
 
-  // ── Fallback Data (Kurated) ───────────────────────────────────────────────────
+  // ── Curated Fallback ────────────────────────────────────────────────────────
   static List<VideoResult> _fallbackVideos(String query) => [
     VideoResult(
-      videoId: 'dQw4w9WgXcQ',
+      videoId: 'dK9BNWTb8M4',
       title: 'Atomic Habits: Cara Membangun Kebiasaan yang Bertahan',
       channelName: 'Otak Produktif',
-      thumbnail: 'https://images.unsplash.com/photo-1506126613408-eca07ce68773?w=320',
-      description: 'Strategi James Clear tentang perubahan 1% setiap hari yang menciptakan hasil luar biasa.',
+      thumbnail: 'https://i.ytimg.com/vi/dK9BNWTb8M4/mqdefault.jpg',
+      description: 'Strategi James Clear tentang perubahan 1% setiap hari.',
       url: 'https://www.youtube.com/results?search_query=${Uri.encodeComponent(query)}',
       publishedAt: '',
+      duration: '12:34',
+      viewCount: 0,
     ),
     VideoResult(
-      videoId: 'abc123',
+      videoId: 'WD440CY2vak',
       title: 'Stoikisme Modern: Cara Tenang di Tengah Kekacauan',
-      channelName: 'Filsafat Hidup Praktis',
-      thumbnail: 'https://images.unsplash.com/photo-1518495973542-4542c06a5843?w=320',
-      description: 'Prinsip Marcus Aurelius yang relevan untuk kehidupan digital masa kini.',
-      url: 'https://www.youtube.com/results?search_query=${Uri.encodeComponent(query + " stoik")}',
+      channelName: 'Filsafat Hidup',
+      thumbnail: 'https://i.ytimg.com/vi/WD440CY2vak/mqdefault.jpg',
+      description: 'Prinsip Marcus Aurelius yang relevan untuk kehidupan digital.',
+      url: 'https://www.youtube.com/results?search_query=${Uri.encodeComponent("$query stoik")}',
       publishedAt: '',
+      duration: '8:20',
+      viewCount: 0,
     ),
     VideoResult(
-      videoId: 'def456',
+      videoId: 'ZD7dXfdDPfg',
       title: 'Deep Work: Fokus Total di Era Distraksi',
-      channelName: 'Akselerasi Finansial',
-      thumbnail: 'https://images.unsplash.com/photo-1559526324-4b87b5e36e44?w=320',
-      description: 'Metode Cal Newport untuk mencapai pekerjaan berkualitas tinggi tanpa gangguan.',
-      url: 'https://www.youtube.com/results?search_query=${Uri.encodeComponent(query + " deep work")}',
+      channelName: 'Akselerasi Diri',
+      thumbnail: 'https://i.ytimg.com/vi/ZD7dXfdDPfg/mqdefault.jpg',
+      description: 'Metode Cal Newport untuk mencapai pekerjaan berkualitas tanpa gangguan.',
+      url: 'https://www.youtube.com/results?search_query=${Uri.encodeComponent("$query deep work")}',
       publishedAt: '',
+      duration: '15:02',
+      viewCount: 0,
     ),
   ];
 
   static List<ArticleResult> _fallbackArticles(String query) => [
     ArticleResult(
       title: 'Meditations — Marcus Aurelius',
-      description: 'Logika kuno tentang membedakan apa yang bisa dikendalikan dan apa yang tidak. '
-          'Panduan stoikisme untuk ketahanan mental dan ketenangan batin.',
+      description: 'Panduan stoikisme untuk ketahanan mental dan ketenangan batin. Logika kuno tentang apa yang bisa dikendalikan.',
       url: 'https://en.wikisource.org/wiki/The_Meditations_of_the_Emperor_Marcus_Antoninus',
-      source: 'Wikisource (Bebas)',
-      imageUrl: 'https://images.unsplash.com/photo-1544947950-fa07a98d237f?w=320',
+      source: 'Wikisource (Gratis)',
+      imageUrl: '',
     ),
     ArticleResult(
       title: 'As a Man Thinketh — James Allen',
-      description: 'Bagaimana pola pikir membentuk karakter, kebiasaan, dan kesuksesan finansial masa depan.',
+      description: 'Bagaimana pola pikir membentuk karakter, kebiasaan, dan kesuksesan masa depan.',
       url: 'https://www.gutenberg.org/ebooks/4507',
       source: 'Project Gutenberg (Gratis)',
-      imageUrl: 'https://images.unsplash.com/photo-1512820790803-83ca734da794?w=320',
+      imageUrl: '',
     ),
     ArticleResult(
-      title: 'The Art of War — Sun Tzu',
-      description: 'Strategi menaklukkan diri sendiri dan memenangkan persaingan tanpa merusak kesehatan mental.',
-      url: 'https://www.gutenberg.org/ebooks/132',
-      source: 'Project Gutenberg (Gratis)',
-      imageUrl: 'https://images.unsplash.com/photo-1531988042231-d39a9cc12a9a?w=320',
+      title: 'The Obstacle Is the Way — Ryan Holiday',
+      description: 'Cara mengubah hambatan menjadi keberhasilan dengan filosofi Stoic modern.',
+      url: 'https://en.wikipedia.org/wiki/The_Obstacle_Is_the_Way',
+      source: 'Wikipedia',
+      imageUrl: '',
     ),
   ];
 }
 
-// ─── Model Classes ──────────────────────────────────────────────────────────────
-
+// ─── Model Classes ─────────────────────────────────────────────────────────────
 class VideoResult {
   final String videoId;
   final String title;
@@ -172,6 +216,8 @@ class VideoResult {
   final String description;
   final String url;
   final String publishedAt;
+  final String duration;
+  final int viewCount;
 
   VideoResult({
     required this.videoId,
@@ -181,6 +227,8 @@ class VideoResult {
     required this.description,
     required this.url,
     required this.publishedAt,
+    this.duration = '',
+    this.viewCount = 0,
   });
 }
 

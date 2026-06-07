@@ -1,8 +1,8 @@
 name: GoGrow
-description: "A premium Personal Growth & Productivity App."
+description: "GoGrow — Premium Personal Growth & Productivity Suite"
 publish_to: 'none'
 
-version: 1.0.0+1
+version: 2.0.0+2
 
 environment:
   sdk: ">=3.0.0 <4.0.0"
@@ -11,13 +11,34 @@ dependencies:
   flutter:
     sdk: flutter
 
+  # Local Storage
   shared_preferences: ^2.3.2
+
+  # HTTP & Networking
   http: ^1.2.0
+  url_launcher: ^6.3.1
+
+  # Firebase
+  firebase_core: ^3.6.0
+  firebase_auth: ^5.3.1
+  cloud_firestore: ^5.4.4
+  google_sign_in: ^6.2.1
+
+  # Notifications
   flutter_local_notifications: ^17.2.4
   timezone: ^0.9.4
+
+  # UI & Charts
   cupertino_icons: ^1.0.8
-  url_launcher: ^6.3.1
+  google_fonts: ^6.2.1
   intl: ^0.19.0
+  fl_chart: ^0.68.0
+
+  # WebView (untuk TikTok & artikel in-app)
+  webview_flutter: ^4.8.0
+
+  # Share & Export
+  share_plus: ^10.0.0
 
 dev_dependencies:
   flutter_test:
